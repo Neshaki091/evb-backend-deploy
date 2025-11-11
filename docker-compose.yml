@@ -1,0 +1,160 @@
+services:
+  # 1. RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_listener"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # 8. MongoDB (Database)
+  mongodb:
+    image: mongo
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db # Sử dụng volume để lưu trữ dữ liệu
+
+  # 2. Auth Service (ĐÃ SỬA)
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./services/auth-services/Dockerfile
+    env_file: ./services/auth-services/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      mongodb:
+        condition: service_started
+
+  # 3. Listing Service (ĐÃ SỬA)
+  listing-service:
+    build:
+      context: .
+      dockerfile: ./services/listing-service/Dockerfile
+    env_file: ./services/listing-service/.env
+    ports:
+      - "5000:5000"
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      mongodb:
+        condition: service_started
+
+  # 4. Search Service (ĐÃ SỬA)
+  search-service:
+    build:
+      context: .
+      dockerfile: ./services/search-service/Dockerfile
+    env_file: ./services/search-service/.env
+    ports:
+      - "8004:8004"
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      mongodb:
+        condition: service_started
+
+  # 5. Review Service (ĐÃ SỬA)
+  review-service:
+    build:
+      context: .
+      dockerfile: ./services/reviews-service/Dockerfile
+    env_file: ./services/reviews-service/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongodb:
+        condition: service_started
+
+  # 6. Transaction Service (ĐÃ SỬA)
+  transaction-service:
+    build:
+      context: .
+      dockerfile: ./services/transaction-service/Dockerfile
+    env_file: ./services/transaction-service/.env
+    ports:
+      - "3001:3001"
+    depends_on:
+      mongodb:
+        condition: service_started
+
+  # 9. Reports Service (ĐÃ SỬA)
+  reports-service:
+    build:
+      context: .
+      dockerfile: ./services/reports-service/Dockerfile
+    env_file: ./services/reports-service/.env
+    ports:
+      - "8001:8001" # Cổng mới
+    depends_on:
+      mongodb:
+        condition: service_started
+
+  # 10. Wishlist Service (ĐÃ SỬA)
+  wishlist-service:
+    build:
+      context: .
+      dockerfile: ./services/wishlist-service/Dockerfile
+    env_file: ./services/wishlist-service/.env
+    ports:
+      - "8002:8002" # Cổng mới
+    depends_on:
+      mongodb:
+        condition: service_started
+
+  # 11. Analytics Service (ĐÃ SỬA)
+  analytics-service:
+    build:
+      context: .
+      dockerfile: ./services/analytics-service/Dockerfile
+    env_file: ./services/analytics-service/.env
+    ports:
+      - "8003:8003" # Cổng mới
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      mongodb:
+        condition: service_started
+
+  # 7. Nginx (API Gateway) (ĐÃ SỬA)
+  nginx:
+    build:
+      context: .
+      dockerfile: ./services/API-Gateway/nginx/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - auth-service
+      - listing-service
+      - search-service
+      - review-service
+      - transaction-service
+      - reports-service # Thêm dependency mới
+      - wishlist-service # Thêm dependency mới
+      - analytics-service # Thêm dependency mới
+      
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: evb-cloudflare-tunnel
+    restart: unless-stopped
+    command: tunnel run c59d0882-668b-493e-823b-7ce232ab4210 
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro 
+      - ./creds:/etc/cloudflared/creds:ro
+    environment:
+      credentials-file: /etc/cloudflared/creds/c59d0882-668b-493e-823b-7ce232ab4210.json
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
