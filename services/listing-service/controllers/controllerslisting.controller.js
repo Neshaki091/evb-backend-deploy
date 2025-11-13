@@ -1,13 +1,18 @@
-const Listing = require("../models/modelslisting.model");
-const { sendMessage } = require('../util/mqService'); // Giả định mqService là file chứa hàm sendMessage
+const Listing = require("../models/modelslisting.model"); // Sửa lại đường dẫn nếu cần
+const { sendMessage } = require('../util/mqService');
 const mongoose = require("mongoose");
+const { GoogleGenerativeAI } = require("@google/generative-ai"); // <<== BỔ SUNG
+
+// === BỔ SUNG: Khởi tạo Gemini AI ===
+// Đảm bảo bạn đã cài: npm install @google/generative-ai
+// và có file .env với GEMINI_API_KEY
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // --- PHẦN ADMIN ---
 
 // Lấy tất cả danh sách (chỉ Admin)
 exports.getAllListings = async (req, res) => {
     try {
-        // KIỂM TRA QUYỀN ADMIN
         if (req.user.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied. Admins only.' });
         }
@@ -16,7 +21,6 @@ exports.getAllListings = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Lọc theo status nếu admin muốn (ví dụ: ?status=Pending)
         const filter = {};
         if (req.query.status) {
             filter.status = req.query.status;
@@ -28,7 +32,6 @@ exports.getAllListings = async (req, res) => {
             .skip(skip)
             .limit(limit);
 
-        // Trả về kết quả
         res.status(200).json({
             success: true,
             data: listings,
@@ -53,12 +56,9 @@ exports.approveListing = async (req, res) => {
             return res.status(403).json({ message: 'Access denied. Admins only.' });
         }
 
-        // *** SỬA LỖI BUG ***
-        // Xóa 'images: this.updateListing.images' vì nó không tồn tại.
-        // updatedListing trả về đã bao gồm 'images' có sẵn.
         const updatedListing = await Listing.findByIdAndUpdate(
             id,
-            { status: 'Active' }, // Sửa status thành 'Active'
+            { status: 'Active' },
             { new: true }
         );
 
@@ -66,10 +66,9 @@ exports.approveListing = async (req, res) => {
             return res.status(404).json({ message: "Listing not found" });
         }
 
-        // QUAN TRỌNG: Gửi tin nhắn "updated" (hoặc created) để Search-Service cập nhật trạng thái
-        // 'updatedListing' (đã chứa 'images')
+        // Gửi tin nhắn "created" để Search-Service index tin này
         const message = {
-            event: 'listing_created', // Hoặc 'listing_updated', tùy theo logic của Search-Service
+            event: 'listing_created',
             data: updatedListing
         };
         await sendMessage(message);
@@ -83,9 +82,7 @@ exports.approveListing = async (req, res) => {
     }
 };
 
-
-// --- PHẦN CÔNG KHAI (PUBLIC) ---
-// 🆕 BỔ SUNG: Gắn nhãn "Đã kiểm định" (Chỉ Admin)
+// Gắn nhãn "Đã kiểm định" (Chỉ Admin)
 exports.verifyListing = async (req, res) => {
     try {
         const { id } = req.params;
@@ -99,8 +96,6 @@ exports.verifyListing = async (req, res) => {
             return res.status(400).json({ message: 'isVerified field must be a boolean.' });
         }
 
-        // *** SỬA LỖI BUG ***
-        // Xóa 'images: this.updateListing.images'
         const updatedListing = await Listing.findByIdAndUpdate(
             id,
             { isVerified: isVerified },
@@ -111,10 +106,9 @@ exports.verifyListing = async (req, res) => {
             return res.status(404).json({ message: "Listing not found" });
         }
 
-        // Gửi tin nhắn cập nhật 
-        // 'updatedListing' (đã chứa 'images')
+        // Gửi tin nhắn cập nhật
         const message = {
-            event: 'listing_created', // Hoặc 'listing_updated'
+            event: 'listing_updated',
             data: updatedListing
         };
         await sendMessage(message);
@@ -128,6 +122,9 @@ exports.verifyListing = async (req, res) => {
     }
 };
 
+
+// --- PHẦN CÔNG KHAI (PUBLIC) ---
+
 // Lấy tất cả danh sách công khai (Chỉ tin 'Active')
 exports.getPublicListings = async (req, res) => {
     try {
@@ -135,12 +132,11 @@ exports.getPublicListings = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // CHỈ TÌM TIN 'Active' (ĐÃ DUYỆT)
         const filter = { status: 'Active' };
 
         const totalListings = await Listing.countDocuments(filter);
         const listings = await Listing.find(filter)
-            .sort({ createdAt: -1 }) // Sắp xếp tin mới nhất lên đầu
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
@@ -165,12 +161,16 @@ exports.getListingById = async (req, res) => {
         const listing = await Listing.findById(req.params.id);
         if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-        // Bổ sung: Nếu tin chưa Active, chỉ Admin hoặc chủ sở hữu mới được xem
-        if (listing.status !== 'Active' &&
-            (req.user.role !== 'admin' && listing.user_id.toString() !== req.user._id)
-        ) {
-            return res.status(403).json({ message: 'Access denied. Listing is not active.' });
+        // === SỬA LỖI 1: KIỂM TRA req.user TRƯỚC ===
+        // Nếu tin chưa Active, chỉ Admin hoặc chủ sở hữu mới được xem
+        if (listing.status !== 'Active') {
+            // Nếu không có user (khách), hoặc user không phải admin VÀ cũng không phải chủ
+            if (!req.user || (req.user.role !== 'admin' && listing.user_id.toString() !== req.user._id)) {
+                return res.status(403).json({ message: 'Access denied. Listing is not active.' });
+            }
         }
+        // === KẾT THÚC SỬA LỖI 1 ===
+
         res.json(listing);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -179,20 +179,18 @@ exports.getListingById = async (req, res) => {
 
 
 // --- CRUD NGƯỜI DÙNG ---
+
+// Lấy tin đăng của chính người đó
 exports.getListingsByOwner = async (req, res) => {
     try {
-        const userId = req.user._id; // Lấy ID của người dùng từ token
-        console.log("User ID from token:", userId);
+        const userId = req.user._id;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Lọc theo user_id và cho phép tất cả trạng thái (Active, Pending, Hidden, Sold)
         const filter = { user_id: userId };
 
-        // Tùy chọn lọc theo status nếu User muốn
         if (req.query.status) {
-            // Đảm bảo status là hợp lệ
             if (['Active', 'Pending', 'Sold', 'Hidden'].includes(req.query.status)) {
                 filter.status = req.query.status;
             }
@@ -219,37 +217,27 @@ exports.getListingsByOwner = async (req, res) => {
     }
 };
 
-// 🟢 Tạo tin đăng mới
+// Tạo tin đăng mới
 exports.createListing = async (req, res) => {
     try {
         const userIdFromToken = req.user._id;
         const body = req.body;
 
-        // --- BỔ SUNG LOGIC XỬ LÝ ID BẮT BUỘC (FIX) ---
         if (body.category === 'Vehicle' && !body.vehicle_id) {
             body.vehicle_id = new mongoose.Types.ObjectId();
         }
-
         if (body.category === 'Battery' && !body.battery_id) {
             body.battery_id = new mongoose.Types.ObjectId();
         }
-        // ---------------------------------------------
 
         const listing = new Listing({
-            ...body, // Sử dụng body đã được sửa
+            ...body, // body từ frontend đã chứa (title, description, vehicle_brand...)
             user_id: userIdFromToken,
             status: 'Pending' // Mặc định trạng thái chờ duyệt
         });
         const savedListing = await listing.save();
 
-        // *** SỬA LỖI: Thêm sendMessage BỊ THIẾU ***
-        // Gửi tin nhắn đến RabbitMQ để Search-Service lưu bản nháp/Pending
-        // (savedListing đã chứa 'images' nếu có)
-        const message = {
-            event: 'listing_created',
-            data: savedListing
-        };
-        await sendMessage(message);
+        // (Đã tắt) Chỉ gửi message đến Search Service KHI ADMIN DUYỆT
 
         res.status(201).json({
             message: "Listing created successfully, waiting for approval",
@@ -260,52 +248,47 @@ exports.createListing = async (req, res) => {
     }
 };
 
-// 🟡 Sửa tin đăng theo ID
+// Sửa tin đăng theo ID
 exports.updateListing = async (req, res) => {
     try {
         const { id } = req.params;
         const userIdFromToken = req.user._id;
         const userRoleFromToken = req.user.role;
 
-        // 1. Tìm tin đăng
         const listing = await Listing.findById(id);
         if (!listing) {
             return res.status(404).json({ message: "Listing not found" });
         }
 
-        // 2. KIỂM TRA QUYỀN SỞ HỮU HOẶC ADMIN
         if (listing.user_id.toString() !== userIdFromToken && userRoleFromToken !== 'admin') {
             return res.status(403).json({ message: "Access denied. You are not the owner or admin." });
         }
 
-        // 3. Cập nhật dữ liệu
         const updateData = req.body;
-        delete updateData.user_id; // Ngăn không cho user tự ý đổi user_id
+        delete updateData.user_id;
 
-        // 🚨 SỬA LỖI: Nếu không phải admin, không cho phép thay đổi status VÀ isVerified
+        // Ngăn user thường tự ý đổi status và nhãn verified
         if (userRoleFromToken !== 'admin') {
             delete updateData.status;
-            delete updateData.isVerified; // Ngăn user thường tự gắn nhãn verified
+            delete updateData.isVerified;
         }
 
         // Nếu user thường sửa tin đã Active, chuyển lại về Pending để Admin duyệt lại
         if (userRoleFromToken !== 'admin' && listing.status === 'Active' && Object.keys(updateData).length > 0) {
             updateData.status = 'Pending';
 
-            // CẬP NHẬT TRƯỚC RỒI MỚI GỬI RESPONSE (FIX LOGIC)
             const pendingListing = await Listing.findByIdAndUpdate(id, updateData, {
                 new: true,
                 runValidators: true,
             });
 
-            // Gửi tin nhắn cập nhật về Pending
+            // Báo cho Search Service biết tin này không còn Active nữa
             const message = {
                 event: 'listing_updated',
                 data: pendingListing
             };
             await sendMessage(message);
 
-            // Thêm thông báo cho người dùng biết tin sẽ bị duyệt lại
             return res.status(200).json({ message: "Listing updated successfully. It has been set to 'Pending' for re-approval.", data: pendingListing });
         }
 
@@ -315,8 +298,7 @@ exports.updateListing = async (req, res) => {
             runValidators: true,
         });
 
-        // 4. Gửi tin nhắn "updated" đến RabbitMQ
-        // (updatedListing đã chứa 'images')
+        // Gửi tin nhắn "updated" đến RabbitMQ (chủ yếu dành cho Admin sửa)
         const message = {
             event: 'listing_updated',
             data: updatedListing
@@ -332,7 +314,7 @@ exports.updateListing = async (req, res) => {
     }
 };
 
-// 🔴 Xóa tin đăng
+// Xóa tin đăng
 exports.deleteListing = async (req, res) => {
     try {
         const { id } = req.params;
@@ -344,19 +326,17 @@ exports.deleteListing = async (req, res) => {
             return res.status(404).json({ message: "Listing not found" });
         }
 
-        // 1. Logic kiểm tra quyền
         if (listing.user_id.toString() !== userIdFromToken && userRoleFromToken !== 'admin') {
             return res.status(403).json({ message: "Access denied. You are not the owner or admin." });
         }
 
-        // 2. Gửi tin nhắn "deleted" đến RabbitMQ TRƯỚC KHI XÓA
+        // Gửi tin nhắn "deleted" đến RabbitMQ TRƯỚC KHI XÓA
         const message = {
             event: 'listing_deleted',
             id: id // Chỉ cần gửi ID
         };
         await sendMessage(message);
 
-        // 3. Xóa
         await Listing.findByIdAndDelete(id);
         res.json({ message: "Listing deleted successfully" });
     } catch (err) {
@@ -364,12 +344,12 @@ exports.deleteListing = async (req, res) => {
     }
 };
 
+// Cập nhật status (Endpoint nội bộ/Admin)
 exports.updateListingStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status } = req.body; // vd: "Sold"
+        const { status } = req.body;
 
-        // Chỉ Admin mới được phép gọi hàm này
         if (req.user.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied. Internal Admin endpoint.' });
         }
@@ -389,12 +369,11 @@ exports.updateListingStatus = async (req, res) => {
         }
 
         // Gửi tin nhắn cập nhật cho Search Service
-        // (updatedListing đã chứa 'images')
         const message = {
             event: 'listing_updated',
             data: updatedListing
         };
-        await sendMessage(message); // Đảm bảo bạn đã import sendMessage
+        await sendMessage(message);
 
         res.status(200).json({
             message: `Listing status updated to ${status}`,
@@ -402,5 +381,76 @@ exports.updateListingStatus = async (req, res) => {
         });
     } catch (err) {
         res.status(400).json({ message: err.message });
+    }
+};
+
+
+// === BỔ SUNG: CHỨC NĂNG AI GỢI Ý GIÁ ===
+exports.suggestPrice = async (req, res) => {
+    try {
+        // 1. Lấy dữ liệu từ frontend
+        const {
+            title,
+            description,
+            category,
+            condition,
+            vehicle_brand,
+            vehicle_model,
+            vehicle_manufacturing_year,
+            vehicle_mileage_km,
+            battery_capacity_kwh,
+            battery_condition_percentage
+        } = req.body;
+
+        // 2. Chọn mô hình
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+        // 3. Tạo Prompt
+        const prompt = `
+      Bạn là một chuyên gia định giá xe điện và pin xe điện cũ tại thị trường Việt Nam.
+      Hãy phân tích thông tin sản phẩm sau đây:
+      - Tiêu đề: ${title}
+      - Danh mục: ${category}
+      - Tình trạng: ${condition}
+      - Mô tả: ${description}
+      ${category === 'Vehicle' ? `
+      - Hãng xe: ${vehicle_brand || 'Không rõ'}
+      - Mẫu xe: ${vehicle_model || 'Không rõ'}
+      - Năm sản xuất: ${vehicle_manufacturing_year || 'Không rõ'}
+      - Số KM đã đi: ${vehicle_mileage_km || 'Không rõ'}
+      ` : ''}
+      ${category === 'Battery' ? `
+      - Dung lượng pin: ${battery_capacity_kwh || 'Không rõ'} kWh
+      - Tình trạng pin: ${battery_condition_percentage || 'Không rõ'} %
+      ` : ''}
+
+      Dựa trên tất cả thông tin này, hãy đề xuất một mức giá bán hợp lý (đơn vị VND).
+      
+      YÊU CẦU QUAN TRỌNG: Chỉ trả lời bằng MỘT CON SỐ duy nhất, không thêm chữ "VND", không dấu phẩy, không giải thích.
+      Ví dụ: 850000000
+    `;
+
+        // 4. Gọi API của Gemini
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        // 5. Lọc và chuyển đổi kết quả
+        const suggestedPrice = parseInt(text.replace(/[^0-9]/g, ''));
+
+        if (!suggestedPrice || isNaN(suggestedPrice)) {
+            console.error("Gemini trả về không phải số:", text);
+            return res.status(500).json({ message: "AI không thể tính toán giá. Vui lòng tự nhập." });
+        }
+
+        // 6. Trả về giá cho frontend
+        res.status(200).json({
+            message: "Gợi ý giá thành công",
+            suggestedPrice: suggestedPrice
+        });
+
+    } catch (error) {
+        console.error("Lỗi khi gọi Gemini API:", error);
+        res.status(500).json({ message: "Lỗi máy chủ khi kết nối với AI gợi ý" });
     }
 };

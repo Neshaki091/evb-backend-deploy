@@ -158,12 +158,12 @@ exports.updateUser = async (req, res) => {
     const requester = req.user;
     const { username, email, phonenumber, role, isActive, ...rest } = req.body; // Destructure các trường cần cập nhật
 
-    try {
+    try {   
+        console.log('Access denied: ', requester._id.toString(), targetUserId, requester.role);
         // KIỂM TRA QUYỀN (Authorization)
         if (requester._id.toString() !== targetUserId && requester.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied. You can only update your own profile.' });
         }
-
         let updateFields = {};
 
         // 1. CHỈNH SỬA FIELD PROFILE
@@ -186,9 +186,6 @@ exports.updateUser = async (req, res) => {
 
         // Nếu người dùng không phải Admin, không thể cập nhật email hoặc phone number 
         // vì cần logic xác thực phức tạp.
-        if (requester.role !== 'admin' && (email || phonenumber)) {
-            return res.status(403).json({ message: 'Forbidden: Cannot change email or phone number without Admin rights or re-verification.' });
-        }
 
         if (Object.keys(updateFields).length === 0) {
             return res.status(400).json({ message: "No valid update fields provided." });

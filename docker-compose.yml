@@ -11,6 +11,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G # Giới hạn RAM
 
   # 8. MongoDB (Database)
   mongodb:
@@ -20,6 +24,10 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db # Sử dụng volume để lưu trữ dữ liệu
+    deploy:
+      resources:
+        limits:
+          memory: 1G # Giới hạn RAM
 
   # 2. Auth Service (ĐÃ SỬA)
   auth-service:
@@ -32,6 +40,10 @@ services:
     depends_on:
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 3. Listing Service (ĐÃ SỬA)
   listing-service:
@@ -46,6 +58,10 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 4. Search Service (ĐÃ SỬA)
   search-service:
@@ -60,6 +76,10 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 5. Review Service (ĐÃ SỬA)
   review-service:
@@ -72,6 +92,10 @@ services:
     depends_on:
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 6. Transaction Service (ĐÃ SỬA)
   transaction-service:
@@ -84,6 +108,10 @@ services:
     depends_on:
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 9. Reports Service (ĐÃ SỬA)
   reports-service:
@@ -96,6 +124,10 @@ services:
     depends_on:
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 10. Wishlist Service (ĐÃ SỬA)
   wishlist-service:
@@ -108,6 +140,10 @@ services:
     depends_on:
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 11. Analytics Service (ĐÃ SỬA)
   analytics-service:
@@ -122,6 +158,10 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M # Giới hạn RAM
 
   # 7. Nginx (API Gateway) (ĐÃ SỬA)
   nginx:
@@ -139,17 +179,25 @@ services:
       - reports-service # Thêm dependency mới
       - wishlist-service # Thêm dependency mới
       - analytics-service # Thêm dependency mới
-      
+    deploy:
+      resources:
+        limits:
+          memory: 256M # Giới hạn RAM
+
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
     container_name: evb-cloudflare-tunnel
     restart: unless-stopped
-    command: tunnel run c59d0882-668b-493e-823b-7ce232ab4210 
+    command: tunnel run c59d0882-668b-493e-823b-7ce232ab4210
     volumes:
-      - ./config.yml:/etc/cloudflared/config.yml:ro 
+      - ./config.yml:/etc/cloudflared/config.yml:ro
       - ./creds:/etc/cloudflared/creds:ro
     environment:
       credentials-file: /etc/cloudflared/creds/c59d0882-668b-493e-823b-7ce232ab4210.json
+    deploy:
+      resources:
+        limits:
+          memory: 256M # Giới hạn RAM
 
 volumes:
   mongodb_data:

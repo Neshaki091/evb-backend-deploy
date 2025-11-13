@@ -24,7 +24,7 @@ const createOrder = async (req, res) => {
     let listingInfo;
     try {
       const token = req.headers.authorization;
-      const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000'; 
+      const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000';
 
       const response = await axios.get(`${listingServiceUrl}/${listingId}`, {
         headers: { Authorization: token }
@@ -106,7 +106,7 @@ const createOrder = async (req, res) => {
 const processPayment = async (req, res) => {
   try {
     const id = req.params.id;
-    const userId = req.user._id; 
+    const userId = req.user._id;
 
     const order = await TransactionUtil.findById(id);
 
@@ -118,7 +118,7 @@ const processPayment = async (req, res) => {
       return res.status(403).json({ success: false, error: 'Access denied. Bạn không phải người mua.' });
     }
 
-    const updatedOrder = await TransactionUtil.markAsPaid(id); 
+    const updatedOrder = await TransactionUtil.markAsPaid(id);
 
     // === GỌI SANG LISTING SERVICE ===
     try {
@@ -131,8 +131,8 @@ const processPayment = async (req, res) => {
       // Cần đảm bảo Listing Service có route: PUT /:id/status
       // Và Model Listing chấp nhận status 'Sold'
       await axios.put(
-        `${listingServiceUrl}/${listingId}/status`, 
-        { status: 'Sold' }, 
+        `${listingServiceUrl}/${listingId}/status`,
+        { status: 'Sold' },
         { headers: { Authorization: token } }
       );
 
@@ -184,26 +184,38 @@ const generateContract = async (req, res) => {
 
     // 3. === BẮT ĐẦU SỬA: Lấy dữ liệu từ các service khác ===
     // (Thay thế cho TransactionUtil.findByIdPopulated)
-    
+
     // Lấy URL từ biến môi trường (Giả định URL của User Service)
-    const userServiceUrl = process.env.USER_SERVICE_URL || 'http://backend-auth-service-1:3000/users';
+    const userServiceUrl = process.env.USER_SERVICE_URL || 'http://backend-auth-service-1:3000';
     const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000';
 
     // Gọi API song song, thêm .catch() để tránh 1 lỗi làm hỏng toàn bộ
     const [buyerRes, sellerRes, listingRes] = await Promise.all([
-        axios.get(`${userServiceUrl}/${order.userId}`, { headers: { Authorization: token } }).catch(e => ({ data: null })),
-        axios.get(`${userServiceUrl}/${order.sellerId}`, { headers: { Authorization: token } }).catch(e => ({ data: null })),
-        axios.get(`${listingServiceUrl}/${order.listingId}`, { headers: { Authorization: token } }).catch(e => ({ data: null }))
-    ]);
+      axios.get(`${userServiceUrl}/userprofile/${order.userId}`, { headers: { Authorization: token } }).catch(e => ({ data: null })),
+      axios.get(`${userServiceUrl}/seller/${order.sellerId}`, { headers: { Authorization: token } }).catch(e => ({ data: null })),
+      axios.get(`${listingServiceUrl}/${order.listingId}`, { headers: { Authorization: token } }).catch(e => ({ data: null })),
 
-    // Gộp dữ liệu lại thành đối tượng 'populatedOrder'
+
+    ]);
+    console.log('buyerRes:', buyerRes.data);
+    console.log('sellerRes:', sellerRes.data);
+    console.log('listingRes:', listingRes.data);
+    // Gộp dữ liệu lại thành đối tượng 'populatedOrder'F
     const populatedOrder = {
-        ...order.toObject(), // Dữ liệu gốc
-        id: order.id,         // Thêm dòng này để đảm bảo 'id' (virtual) được truyền đi
-        userId: (buyerRes.data?.data || buyerRes.data) || { _id: order.userId, profile: { username: 'User Bị Lỗi' } },
-        sellerId: (sellerRes.data?.data || sellerRes.data) || { _id: order.sellerId, profile: { username: 'User Bị Lỗi' } },
-        listingId: (listingRes.data?.data || listingRes.data) || { _id: order.listingId, title: 'Tin đăng Bị Lỗi' }
-    };
+      ...order.toObject(),
+      id: order.id,
+      userId: buyerRes.data
+        ? { _id: buyerRes.data._id, profile: { username: buyerRes.data.username, email: buyerRes.data.email, phonenumber: buyerRes.data.phonenumber } }
+        : { _id: order.userId, profile: { username: 'User Bị Lỗi', email: 'N/A', phonenumber: 'N/A' } },
+
+      sellerId: sellerRes.data
+        ? { _id: sellerRes.data.user_id || sellerRes.data._id, profile: { username: sellerRes.data.username, email: sellerRes.data.email, phonenumber: sellerRes.data.phonenumber } }
+        : { _id: order.sellerId, profile: { username: 'User Bị Lỗi', email: 'N/A', phonenumber: 'N/A' } },
+
+      listingId: listingRes.data
+        ? { _id: listingRes.data._id, title: listingRes.data.title }
+        : { _id: order.listingId, title: 'Tin đăng Bị Lỗi' }
+    };
     // === KẾT THÚC SỬA ===
 
     pdfGenerator.generate(res, populatedOrder); // Hàm này sẽ stream PDF về client
