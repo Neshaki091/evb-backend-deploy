@@ -146,6 +146,8 @@ services:
           memory: 512M # Giới hạn RAM
 
   # 11. Analytics Service (ĐÃ SỬA)
+  
+
   analytics-service:
     build:
       context: .
@@ -162,6 +164,24 @@ services:
       resources:
         limits:
           memory: 512M # Giới hạn RAM
+
+  auction-service:
+    build:
+      context: .
+      dockerfile: ./services/auction-service/Dockerfile
+    env_file: ./services/auction-service/.env
+    ports:
+      - "8070:8070"
+    depends_on:
+      rabbitmq:
+        condition: service_started
+      mongodb:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
 
   # 7. Nginx (API Gateway) (ĐÃ SỬA)
   nginx:
