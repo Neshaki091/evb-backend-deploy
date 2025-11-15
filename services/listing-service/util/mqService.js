@@ -15,7 +15,7 @@ async function connectRabbitMQ() {
         channel = await connection.createChannel();
 
         // Assert exchange cho analytics service
-        await channel.assertExchange(EXCHANGE_NAME, 'fanout', { durable: true });
+        await channel.assertExchange(EXCHANGE_NAME, 'direct', { durable: true });
         
         // Giữ lại queue cũ cho search service (backward compatibility)
         await channel.assertQueue(QUEUE_NAME, { durable: true });

@@ -11,7 +11,7 @@ async function connectRabbitMQ() {
         if (connection) return connection;
         connection = await amqp.connect(RABBITMQ_URL);
         channel = await connection.createChannel();
-        await channel.assertExchange(EXCHANGE_NAME, 'fanout', { durable: true });
+        await channel.assertExchange(EXCHANGE_NAME, 'direct', { durable: true });
         console.log('✅ Connected to RabbitMQ (Auth Service)');
         
         connection.on("error", (err) => {
@@ -58,6 +58,8 @@ async function publishEvent(eventName, data) {
 connectRabbitMQ();
 
 module.exports = { connectRabbitMQ, publishEvent, EXCHANGE_NAME };
+
+
 
 
 
