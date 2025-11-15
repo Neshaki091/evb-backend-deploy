@@ -4,6 +4,8 @@ const router = express.Router();
 // SỬA 1: Chỉ import controller object, không import lẻ
 const listingController = require("../controllers/controllerslisting.controller");
 const { authmiddleware } = require("../shared/authmiddleware");
+const { allowAdminOrInternal } = require("../util/allowAdminOrInternal");
+const { allowAdminRole } = require("../shared/adminMiddleware");
 
 // --- PUBLIC & CƠ BẢN ---
 // SỬA 2: Dùng listingController.functionName cho nhất quán
@@ -22,20 +24,21 @@ router.delete("/:id", authmiddleware, listingController.deleteListing);
 
 // --- CHỨC NĂNG ADMIN ---
 // SỬA 2: Dùng listingController.functionName
-router.get("/", authmiddleware, listingController.getAllListings);
+router.get("/", authmiddleware,allowAdminRole, listingController.getAllListings);
 router.put(
     "/:id/approve",
-    authmiddleware,
+    authmiddleware,allowAdminRole,
     listingController.approveListing
 );
 router.put(
     "/:id/verify",
     authmiddleware,
+    allowAdminRole,
     listingController.verifyListing
 );
 router.put(
     "/:id/status",
-    authmiddleware,
+    allowAdminOrInternal,
     listingController.updateListingStatus
 );
 

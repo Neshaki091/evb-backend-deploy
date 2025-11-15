@@ -143,6 +143,10 @@ Transaction.updateById = async (id, updates) => {
  * Cập nhật Transaction (trước đây dùng để populate)
  * ĐÃ SỬA: Xóa bỏ .populate()
  */
+Transaction.deleteById = async (id) => {
+  return await TransactionModel.findByIdAndDelete(id);
+};
+
 Transaction.updateByIdPopulated = async (id, updates) => {
   // === SỬA LỖI: Đã xóa .populate() ===
   return await TransactionModel.findByIdAndUpdate(id, updates, { new: true });

@@ -13,7 +13,7 @@ const searchListings = async (params) => {
         limit = 10
     } = params;
 
-    const query = { status: 'Active' }; // Luôn lọc tin đã được duyệt
+    const query = { status: {$in: ["Active", "Sold"]} }; // Luôn lọc tin đã được duyệt
 
     // --- XÂY DỰNG QUERY LỌC ---
     

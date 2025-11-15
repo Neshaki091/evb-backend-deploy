@@ -3,6 +3,7 @@ const TransactionUtil = require('../utils/Transaction');
 const pdfGenerator = require('../utils/pdfGenerator');
 const axios = require('axios');
 const mongoose = require('mongoose');
+const { publishEvent } = require('../utils/mqService');
 
 /**
  * Tạo Đơn hàng (An toàn)
@@ -107,6 +108,7 @@ const processPayment = async (req, res) => {
   try {
     const id = req.params.id;
     const userId = req.user._id;
+    const token = req.headers.authorization; // Cần token để gọi service khác
 
     const order = await TransactionUtil.findById(id);
 
@@ -114,35 +116,72 @@ const processPayment = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Không tìm thấy đơn hàng' });
     }
 
+    // Kiểm tra quyền (OK)
     if (order.userId.toString() !== userId.toString()) {
       return res.status(403).json({ success: false, error: 'Access denied. Bạn không phải người mua.' });
     }
 
+    // Kiểm tra status (OK)
+    if (order.status !== 'pending') {
+      return res.status(400).json({ success: false, error: 'Đơn hàng này không còn ở trạng thái chờ thanh toán.' });
+    }
+
+    // === ⭐️ BƯỚC KIỂM TRA QUAN TRỌNG NHẤT (THÊM MỚI) ===
+    const listingId = order.listingId;
+    const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000';
+
+    try {
+      const response = await axios.get(`${listingServiceUrl}/${listingId}`, {
+        headers: { Authorization: token, 'x-internal-key': process.env.INTERNAL_API_KEY  }
+      });
+      const listingData = response.data.data || response.data;
+
+      // Nếu listing không còn 'Active' (ví dụ: đã 'Sold' hoặc 'Hidden')
+      if (!listingData || listingData.status !== 'Active') {
+        console.warn(`[TransactionService] Thanh toán bị từ chối cho đơn ${id}. Listing ${listingId} không còn khả dụng (Status: ${listingData?.status}).`);
+
+        // Hủy đơn hàng 'pending' này vì nó không còn giá trị
+        await TransactionUtil.deleteById(id);
+
+        return res.status(400).json({
+          success: false,
+          error: 'Thanh toán thất bại. Tin đăng này đã được bán hoặc không còn khả dụng.'
+        });
+      }
+    } catch (err) {
+      console.error(`[TransactionService] Lỗi nghiêm trọng khi kiểm tra Listing ${listingId} trước khi thanh toán.`, err.message);
+      return res.status(500).json({ success: false, error: 'Lỗi khi xác thực tin đăng. Vui lòng thử lại.' });
+    }
+    // === KẾT THÚC BƯỚC KIỂM TRA ===
+
+
+    // 1. ĐÁNH DẤU LÀ ĐÃ THANH TOÁN (Nếu an toàn)
     const updatedOrder = await TransactionUtil.markAsPaid(id);
 
-    // === GỌI SANG LISTING SERVICE ===
+    // 2. GỬI EVENT (OK)
     try {
-      const listingId = updatedOrder.listingId;
-      const token = req.headers.authorization;
-      const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000';
+      await publishEvent('transaction_paid', {
+        transactionId: updatedOrder._id,
+        price: updatedOrder.price,
+        commissionAmount: updatedOrder.commissionAmount
+      });
+    } catch (error) {
+      console.error('Error publishing transaction_paid event:', error.message);
+    }
 
+    // 3. CẬP NHẬT LISTING SANG 'SOLD' (OK)
+    try {
       console.log(`[TransactionService] Thanh toán ${id} thành công. Bắt đầu cập nhật Listing ${listingId}...`);
-
-      // Cần đảm bảo Listing Service có route: PUT /:id/status
-      // Và Model Listing chấp nhận status 'Sold'
       await axios.put(
         `${listingServiceUrl}/${listingId}/status`,
         { status: 'Sold' },
-        { headers: { Authorization: token } }
+        { headers: { Authorization: token, 'x-internal-key': process.env.INTERNAL_API_KEY  } }
       );
-
       console.log(`[TransactionService] Đã cập nhật Listing ${listingId} thành công.`);
-
     } catch (listingError) {
-      console.error(`[TransactionService] LỖI NGHIÊM TRỌNG: Thanh toán ${id} THÀNH CÔNG, nhưng FAILED khi cập nhật status cho Listing ${updatedOrder.listingId}.`);
+      console.error(`[TransactionService] LỖI NGHIÊM TRỌNG: Thanh toán ${id} THÀNH CÔNG, nhưng FAILED khi cập nhật status cho Listing ${listingId}.`);
       console.error(listingError.message);
     }
-    // === KẾT THÚC GỌI ===
 
     res.json({ success: true, order: updatedOrder });
 
@@ -247,6 +286,93 @@ const getOrderHistory = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+const cancelPendingOrder = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const userId = req.user._id.toString();
+    const token = req.headers.authorization;
+
+    // 1. Tìm đơn hàng
+    const order = await TransactionUtil.findById(id);
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Không tìm thấy đơn hàng' });
+    }
+
+    // 2. Kiểm tra quyền sở hữu
+    if (order.userId.toString() !== userId) {
+      return res.status(403).json({ success: false, error: 'Access denied. Bạn không thể hủy đơn hàng này.' });
+    }
+
+    // 3. Chỉ được hủy đơn hàng 'pending'
+    if (order.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: `Bạn chỉ có thể hủy đơn hàng ở trạng thái 'pending'. Đơn này đang ở trạng thái '${order.status}'.`
+      });
+    }
+
+    // 4. KIỂM TRA ĐIỀU KIỆN (Như bạn yêu cầu):
+    // Gọi sang Listing Service để xem tin đăng đã bị bán chưa
+    const listingId = order.listingId;
+    const listingServiceUrl = process.env.LISTING_SERVICE_URL || 'http://backend-listing-service-1:5000';
+    let currentListingStatus = 'Unknown';
+
+    try {
+      const response = await axios.get(`${listingServiceUrl}/${listingId}`, {
+        headers: { Authorization: token }
+      });
+      const listingData = response.data.data || response.data;
+      if (listingData && listingData.status) {
+        currentListingStatus = listingData.status;
+      }
+    } catch (err) {
+      console.warn(`[TransactionService] Không thể kiểm tra status của Listing ${listingId}: ${err.message}`);
+      // Dù lỗi vẫn tiếp tục (chỉ là không cập nhật lại listing)
+    }
+
+    // 5. Xóa đơn hàng 'pending'
+    await TransactionUtil.deleteById(id);
+
+    // 6. Xử lý Logic Cập nhật Listing
+    // Nếu tin đăng đã bị BÁN (do người khác nhanh tay hơn)
+    if (currentListingStatus === 'Sold') {
+      return res.json({
+        success: true,
+        message: 'Đã hủy đơn hàng. Tin đăng này đã được bán cho người khác.'
+      });
+    }
+
+    // Nếu tin đăng CHƯA BÁN, cập nhật lại status (ví dụ: 'Active' hoặc 'Available')
+    // Giả sử Listing Model dùng 'Active'
+    try {
+      await axios.put(
+        `${listingServiceUrl}/${listingId}/status`,
+        { status: 'Active' }, // Trả lại trạng thái Active
+        { headers: { Authorization: token } }
+      );
+
+      console.log(`[TransactionService] Hủy đơn hàng ${id}, đã cập nhật Listing ${listingId} về 'Active'.`);
+
+      return res.json({
+        success: true,
+        message: 'Đã hủy đơn hàng thành công và cập nhật lại tin đăng.'
+      });
+
+    } catch (listingError) {
+      console.error(`[TransactionService] Hủy đơn hàng ${id} thành công, nhưng FAILED khi cập nhật Listing ${listingId} về 'Active'.`);
+      console.error(listingError.message);
+      return res.json({
+        success: true,
+        message: 'Đã hủy đơn hàng (nhưng có lỗi khi cập nhật lại tin đăng).'
+      });
+    }
+
+  } catch (error) {
+    console.error('Cancel order error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
 
 
 module.exports = {
@@ -254,4 +380,5 @@ module.exports = {
   processPayment,
   generateContract,
   getOrderHistory,
+  cancelPendingOrder,
 };

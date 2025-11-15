@@ -1,6 +1,7 @@
 const { generateRefreshToken, generateAccessToken, addUserRefreshToken, deleteUserRefreshToken, getUserRefreshToken } = require('../util/refreshToken');
 const userschema = require('../models/user.model');
 const bcrypt = require('bcrypt');
+const { publishEvent } = require('../util/mqService');
 
 exports.getAllUsers = async (req, res) => {
     // Đã có logic .select() tốt
@@ -142,6 +143,16 @@ exports.createUser = async (req, res) => {
         const userObject = newUser.toObject();
         delete userObject.password;
         delete userObject.Tokens;
+
+        // Publish event to RabbitMQ
+        try {
+            await publishEvent('user_registered', {
+                userId: newUser._id,
+                email: newUser.profile.email
+            });
+        } catch (error) {
+            console.error('Error publishing user_registered event:', error.message);
+        }
 
         res.status(201).json({ message: 'User created successfully', user: userObject });
     } catch (error) {

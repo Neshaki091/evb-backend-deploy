@@ -1,5 +1,6 @@
 // reports-service/src/controllers/report.controller.js
 const Report = require('../models/Report.model');
+const { publishEvent } = require('../../util/mqService');
 
 // 1. Tạo báo cáo (User)
 exports.createReport = async (req, res) => {
@@ -18,6 +19,17 @@ exports.createReport = async (req, res) => {
             reasonCode,
             details,
         });
+
+        // Publish event to RabbitMQ for analytics service
+        try {
+            await publishEvent('report_created', {
+                reportId: report._id,
+                reporterId: report.reporterId,
+                targetId: report.subjectId
+            });
+        } catch (error) {
+            console.error('Error publishing report_created event:', error.message);
+        }
 
         res.status(201).json({ success: true, message: 'Report submitted successfully', data: report });
     } catch (error) {

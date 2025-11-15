@@ -21,6 +21,16 @@ const DailyStatsSchema = new mongoose.Schema({
     totalCommission: { type: Number, default: 0 },
     totalTransactions: { type: Number, default: 0 },
 
+    // Metrics từ Review Service
+    totalReviews: { type: Number, default: 0 },
+    totalRatingSum: { type: Number, default: 0 },
+
+    // Metrics từ Wishlist Service
+    totalWishlistAdds: { type: Number, default: 0 },
+
+    // Metrics từ Report Service
+    totalReports: { type: Number, default: 0 },
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('DailyStats', DailyStatsSchema);

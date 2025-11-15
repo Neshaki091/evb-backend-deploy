@@ -1,5 +1,5 @@
 const Listing = require("../models/modelslisting.model"); // Sửa lại đường dẫn nếu cần
-const { sendMessage } = require('../util/mqService');
+const { sendMessage, publishEvent } = require('../util/mqService');
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai"); // <<== BỔ SUNG
 
@@ -132,14 +132,14 @@ exports.getPublicListings = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        const filter = { status: 'Active' };
+        const filter = { status: { $in: ['Active', 'Sold'] } };
 
         const totalListings = await Listing.countDocuments(filter);
         const listings = await Listing.find(filter)
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
-
+        console.log("Fetched public listings:", listings.length);
         res.status(200).json({
             success: true,
             data: listings,
@@ -156,22 +156,74 @@ exports.getPublicListings = async (req, res) => {
 };
 
 // Lấy tin đăng theo ID
+
+
 exports.getListingById = async (req, res) => {
     try {
         const listing = await Listing.findById(req.params.id);
         if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-        // === SỬA LỖI 1: KIỂM TRA req.user TRƯỚC ===
-        // Nếu tin chưa Active, chỉ Admin hoặc chủ sở hữu mới được xem
-        if (listing.status !== 'Active') {
-            // Nếu không có user (khách), hoặc user không phải admin VÀ cũng không phải chủ
-            if (!req.user || (req.user.role !== 'admin' && listing.user_id.toString() !== req.user._id)) {
-                return res.status(403).json({ message: 'Access denied. Listing is not active.' });
+        // === KIỂM TRA QUYỀN TRUY CẬP ===
+        const internalApiKey = req.headers['x-internal-key'];
+        const token = req.headers.authorization;
+
+        // 1. Cho phép Service nội bộ (như TransactionService)
+        if (internalApiKey && internalApiKey === process.env.INTERNAL_API_KEY) {
+            return res.json(listing);
+        }
+
+        // 2. Nếu listing 'Active', cho phép tất cả (cả khách)
+        if (listing.status === 'Active' || listing.status === 'Sold') {
+            return res.json(listing);
+        }
+
+        // 3. Nếu listing KHÔNG 'Active' (Pending, Sold, Hidden)
+        // Phải kiểm tra user
+        if (!req.user) {
+            return res.status(401).json({ message: 'You must be logged in to view this listing.' });
+        }
+
+        // 4. Cho phép Admin
+        if (req.user.role === 'admin') {
+            return res.json(listing);
+        }
+
+        // 5. Cho phép Người bán (Seller)
+        if (listing.user_id.toString() === req.user._id) {
+            return res.json(listing);
+        }
+
+        // 6. ⭐️ KIỂM TRA MỚI: Cho phép Người mua (Buyer)
+        if (listing.status === 'Sold') {
+            try {
+                // Gọi nội bộ TransactionService để kiểm tra
+                const transServiceUrl = process.env.TRANSACTION_SERVICE_URL || 'http://backend-transaction-service-1:4000';
+
+                // Cần 1 route mới bên TransactionService: GET /transactions/check-buyer/:listingId
+                // (Route này sẽ kiểm tra xem req.user.id có phải là buyer của listing này không)
+                const checkRes = await axios.get(
+                    `${transServiceUrl}/check-buyer/${listing._id}`,
+                    // Gửi token của user VÀ internal key để TransactionService tin tưởng
+                    {
+                        headers: {
+                            Authorization: token,
+                            'x-internal-key': process.env.INTERNAL_API_KEY
+                        }
+                    }
+                );
+
+                if (checkRes.data.isBuyer) {
+                    return res.json(listing);
+                }
+            } catch (err) {
+                console.error("Error checking buyer status:", err.message);
+                // Bỏ qua lỗi và để nó rơi xuống 403
             }
         }
-        // === KẾT THÚC SỬA LỖI 1 ===
 
-        res.json(listing);
+        // 7. Nếu không phải các trường hợp trên -> Từ chối
+        return res.status(403).json({ message: 'Access denied. Listing is not active or you do not have permission.' });
+
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -236,6 +288,17 @@ exports.createListing = async (req, res) => {
             status: 'Pending' // Mặc định trạng thái chờ duyệt
         });
         const savedListing = await listing.save();
+
+        // Publish event to RabbitMQ for analytics service
+        try {
+            await publishEvent('listing_created', {
+                listingId: savedListing._id,
+                authorId: savedListing.user_id,
+                price: savedListing.price
+            });
+        } catch (error) {
+            console.error('Error publishing listing_created event:', error.message);
+        }
 
         // (Đã tắt) Chỉ gửi message đến Search Service KHI ADMIN DUYỆT
 
@@ -350,9 +413,6 @@ exports.updateListingStatus = async (req, res) => {
         const { id } = req.params;
         const { status } = req.body;
 
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied. Internal Admin endpoint.' });
-        }
 
         if (!status || !['Active', 'Pending', 'Sold', 'Hidden'].includes(status)) {
             return res.status(400).json({ message: 'Invalid status value' });

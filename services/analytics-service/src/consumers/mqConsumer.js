@@ -22,6 +22,9 @@ async function startConsumer() {
         await channel.bindQueue(q.queue, EXCHANGE_NAME, 'user_registered');
         await channel.bindQueue(q.queue, EXCHANGE_NAME, 'transaction_paid');
         await channel.bindQueue(q.queue, EXCHANGE_NAME, 'listing_created');
+        await channel.bindQueue(q.queue, EXCHANGE_NAME, 'review_created');
+        await channel.bindQueue(q.queue, EXCHANGE_NAME, 'wishlist_item_added');
+        await channel.bindQueue(q.queue, EXCHANGE_NAME, 'report_created');
         
         console.log("👂 Waiting for platform events in %s", q.queue);
 
@@ -60,6 +63,26 @@ async function startConsumer() {
                         }
                     });
                     console.log(`[Stats] Transaction paid. Commission: +${commission}`);
+                } else if (eventType === 'review_created') {
+                    // Giả định data gửi kèm có rating
+                    const rating = data.rating || 0;
+                    await DailyStats.updateOne({ _id: stats._id }, { 
+                        $inc: { 
+                            totalReviews: 1,
+                            totalRatingSum: rating
+                        }
+                    });
+                    console.log(`[Stats] Review created. Total Reviews: +1, Rating: +${rating}`);
+                } else if (eventType === 'wishlist_item_added') {
+                    await DailyStats.updateOne({ _id: stats._id }, { 
+                        $inc: { totalWishlistAdds: 1 }
+                    });
+                    console.log(`[Stats] Wishlist item added. Total Wishlist Adds: +1`);
+                } else if (eventType === 'report_created') {
+                    await DailyStats.updateOne({ _id: stats._id }, { 
+                        $inc: { totalReports: 1 }
+                    });
+                    console.log(`[Stats] Report created. Total Reports: +1`);
                 }
             } catch (error) {
                 console.error('Error processing event:', error);

@@ -1,6 +1,7 @@
 
 // wishlist-service/src/controllers/wishlist.controller.js
 const WishlistItem = require('../models/WishlistItem.model');
+const { publishEvent } = require('../../util/mqService');
 
 // 1. Lấy tất cả tin yêu thích của User (GET /wishlist/my)
 exports.getWishlist = async (req, res) => {
@@ -28,6 +29,17 @@ exports.addToList = async (req, res) => {
         }
 
         const newItem = await WishlistItem.create({ userId, listingId });
+        
+        // Publish event to RabbitMQ for analytics service
+        try {
+            await publishEvent('wishlist_item_added', {
+                listingId: listingId,
+                userId: userId
+            });
+        } catch (error) {
+            console.error('Error publishing wishlist_item_added event:', error.message);
+        }
+        
         res.status(201).json({ success: true, message: 'Added to wishlist', data: newItem });
     } catch (error) {
         // Xử lý lỗi trùng lặp (E11000 Duplicate Key Error)
